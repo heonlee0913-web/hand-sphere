@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Hand Sphere</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root { --accent:#7df9c8; --bg:#010608; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    background:var(--bg); overflow:hidden;
+    font-family:'DM Sans',system-ui,'Courier New',monospace;
+    touch-action:none;
+    -webkit-user-select:none; user-select:none;
+  }
+  #canvas { position:fixed; top:0; left:0; }
+  #vignette {
+    position:fixed; inset:0; z-index:1; pointer-events:none;
+    background:radial-gradient(ellipse 80% 80% at 50% 50%,
+      transparent 30%, rgba(0,4,8,0.38) 65%, rgba(0,2,6,0.82) 100%);
+  }
+
+  /* ── Camera button — large touch target ── */
+  #cam-wrap {
+    position:fixed; z-index:20;
+    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    right: calc(24px + env(safe-area-inset-right, 0px));
+    display:flex; align-items:center; gap:10px;
+  }
+  #cam-label { font-size:10px; letter-spacing:0.14em; font-weight:300; color:rgba(255,255,255,0.25); transition:color .3s; pointer-events:none; }
+  #cam-label.on { color:var(--accent); }
+  #cam-btn {
+    width:58px; height:58px; border-radius:50%;
+    background:rgba(255,255,255,0.05);
+    border:1px solid rgba(255,255,255,0.14);
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+    transition:background .15s, border-color .15s;
+  }
+  #cam-btn:active { background:rgba(255,255,255,0.18); }
+  #cam-btn.active { background:rgba(125,249,200,0.1); border-color:rgba(125,249,200,0.4); }
+  #cam-btn svg { width:22px; height:22px; fill:none; stroke:rgba(255,255,255,0.38); stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; transition:stroke .2s; }
+  #cam-btn.active svg { stroke:var(--accent); }
+
+  /* ── Preview ── */
+  #video {
+    position:fixed; border-radius:10px; opacity:.68; transform:scaleX(-1);
+    border:1px solid rgba(125,249,200,0.15); display:none; z-index:10;
+    /* Position above cam button */
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    right: calc(24px + env(safe-area-inset-right, 0px));
+    width:130px; height:82px;
+  }
+  #video.show { display:block; }
+
+  /* ── Finger cursor ── */
+  #cur {
+    position:fixed; z-index:40; pointer-events:none;
+    width:16px; height:16px; border-radius:50%;
+    background:rgba(255,255,255,.95);
+    box-shadow:0 0 8px rgba(125,249,200,.9),0 0 20px rgba(125,249,200,.35);
+    transform:translate(-50%,-50%); display:none;
+    transition:width .12s,height .12s,background .12s,box-shadow .12s;
+  }
+  #cur.hover {
+    width:26px; height:26px; background:var(--accent);
+    box-shadow:0 0 16px rgba(125,249,200,1),0 0 32px rgba(125,249,200,.5);
+  }
+  #cur.shaking {
+    background:#ffaa77;
+    box-shadow:0 0 14px rgba(255,150,80,1),0 0 28px rgba(255,150,80,.45);
+  }
+
+  /* ── Shake ring — r=26, circumference ≈ 163.36 ── */
+  #shake-ring {
+    position:fixed; z-index:39; pointer-events:none;
+    width:64px; height:64px;
+    transform:translate(-50%,-50%);
+    display:none; opacity:0; transition:opacity .2s;
+  }
+  #shake-ring.show { opacity:1; }
+  #shake-ring circle {
+    fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linecap:round;
+    stroke-dasharray:163.36; stroke-dashoffset:163.36;
+    transform-origin:center; transform:rotate(-90deg);
+    
+  }
+
+  /* ── Site label ── */
+  #site-label {
+    position:fixed; z-index:42; pointer-events:none;
+    font-size:11px; font-weight:300; letter-spacing:.18em;
+    color:rgba(255,255,255,.75); text-transform:uppercase;
+    transform:translateX(-50%); white-space:nowrap; opacity:0;
+    transition:opacity .15s; text-shadow:0 1px 8px rgba(0,0,0,.9);
+  }
+  #site-label.show { opacity:1; }
+
+  /* ── Toast ── */
+  #toast {
+    position:fixed; left:50%;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    transform:translateX(-50%) translateY(8px);
+    background:rgba(4,8,16,.92); color:#fff;
+    padding:8px 22px; border-radius:22px;
+    font-size:12px; font-weight:300; letter-spacing:.1em;
+    border:1px solid rgba(125,249,200,.22);
+    pointer-events:none; opacity:0;
+    transition:opacity .22s,transform .22s; z-index:50;
+  }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ── UI hint ── */
+  #ui {
+    position:fixed; z-index:10;
+    top: calc(18px + env(safe-area-inset-top, 0px));
+    left: calc(18px + env(safe-area-inset-left, 0px));
+    color:rgba(255,255,255,.2); font-size:10px; font-weight:300;
+    letter-spacing:.09em; line-height:2.3; transition:opacity 1.5s;
+  }
+  #ui.hidden { opacity:0; pointer-events:none; }
+  #ui span { color:rgba(125,249,200,.5); }
+
+  /* ── Loading ── */
+  #loading {
+    position:fixed; z-index:10;
+    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    left: calc(18px + env(safe-area-inset-left, 0px));
+    font-size:9px; letter-spacing:.14em; font-weight:300;
+    color:rgba(255,255,255,.18); transition:opacity 1s;
+  }
+  #loading.done { opacity:0; pointer-events:none; }
+
+  #nav-link { display:none; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="vignette"></div>
+<video id="video" autoplay playsinline muted></video>
+<div id="cur"></div>
+<svg id="shake-ring" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26"/></svg>
+<div id="toast"></div>
+<div id="site-label"></div>
+<div id="loading">아이콘 로딩 중...</div>
+<a id="nav-link" target="_blank" rel="noopener noreferrer"></a>
+
+<div id="ui">
+  <span>☝</span> 검지만 (엄지 접음) → 1.6초 유지 → 접속<br>
+  <span>🤏</span> 엄지+검지 둘 다 펴고 거리 조절 → 확대/축소<br>
+  <span>✋</span> 손 다 펴고 이동 → 회전<br>
+  <span>✊✊</span> 양손 주먹→팍 펴기 → 크게 확대
+</div>
+
+<div id="cam-wrap">
+  <div id="cam-label">OFF</div>
+  <button id="cam-btn" title="카메라 ON/OFF">
+    <svg viewBox="0 0 24 24"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+  </button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+// ════════════════════════════════════════════
+//  SITES
+// ════════════════════════════════════════════
+const SITES = [
+  { name:'YouTube',   url:'https://youtube.com',       icon:'https://cdn.simpleicons.org/youtube/FF0000' },
+  { name:'Instagram', url:'https://instagram.com',     icon:'https://cdn.simpleicons.org/instagram/E1306C' },
+  { name:'KakaoTalk', url:'https://kakao.com',         icon:'https://cdn.simpleicons.org/kakaotalk/FAE100', app:'kakaokompassauth://authorize' },
+  { name:'Notion',    url:'https://notion.so',         icon:'https://cdn.simpleicons.org/notion/ffffff',  app:'notion://' },
+  { name:'Netflix',   url:'https://netflix.com',       icon:'https://cdn.simpleicons.org/netflix/E50914' },
+  { name:'X',         url:'https://x.com',             icon:'https://cdn.simpleicons.org/x/ffffff' },
+  { name:'Discord',   url:'https://discord.com',       icon:'https://cdn.simpleicons.org/discord/5865F2' },
+  { name:'Spotify',   url:'https://spotify.com',       icon:'https://cdn.simpleicons.org/spotify/1DB954' },
+  { name:'Figma',     url:'https://figma.com',         icon:'https://cdn.simpleicons.org/figma/F24E1E' },
+  { name:'GitHub',    url:'https://github.com',        icon:'https://cdn.simpleicons.org/github/ffffff' },
+  { name:'Google',    url:'https://google.com',        icon:'https://cdn.simpleicons.org/google/4285F4' },
+  { name:'Claude',    url:'https://claude.ai',         icon:'https://cdn.simpleicons.org/anthropic/ffffff' },
+  { name:'ChatGPT',   url:'https://chat.openai.com',   icon:'https://cdn.simpleicons.org/openai/ffffff' },
+  { name:'Reddit',    url:'https://reddit.com',        icon:'https://cdn.simpleicons.org/reddit/FF4500' },
+  { name:'LinkedIn',  url:'https://linkedin.com',      icon:'https://cdn.simpleicons.org/linkedin/0A66C2' },
+  { name:'TikTok',    url:'https://tiktok.com',        icon:'https://cdn.simpleicons.org/tiktok/ffffff' },
+  { name:'Naver',     url:'https://naver.com',         icon:'https://cdn.simpleicons.org/naver/03C75A' },
+  { name:'Pinterest', url:'https://pinterest.com',     icon:'https://cdn.simpleicons.org/pinterest/E60023' },
+  { name:'Twitch',    url:'https://twitch.tv',         icon:'https://cdn.simpleicons.org/twitch/9146FF' },
+  { name:'Vercel',    url:'https://vercel.com',        icon:'https://cdn.simpleicons.org/vercel/ffffff' },
+];
+
+// ════════════════════════════════════════════
+//  NAVIGATE (popup-safe)
+// ════════════════════════════════════════════
+const navLink = document.getElementById('nav-link');
+
+// Smart navigate: try app scheme first, fall back to web after 1.2s
+function navigateTo(url, appScheme) {
+  if (appScheme) {
+    // Attempt app launch via hidden iframe (works on iOS & Windows with registered schemes)
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = appScheme;
+    document.body.appendChild(iframe);
+    // Fallback to web if app didn't open (page stays visible = app not installed)
+    setTimeout(() => {
+      document.body.removeChild(iframe);
+      // Only redirect if page is still visible (app didn't take over)
+      if (!document.hidden) {
+        navLink.href = url;
+        navLink.click();
+      }
+    }, 1200);
+  } else {
+    navLink.href = url;
+    navLink.click();
+  }
+}
+
+// ════════════════════════════════════════════
+//  THREE.JS
+// ════════════════════════════════════════════
+const canvasEl = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x010608, 1);
+
+const scene = new THREE.Scene();
+const cam3  = new THREE.PerspectiveCamera(58, window.innerWidth/window.innerHeight, 0.1, 1000);
+cam3.position.z = 3.8;
+
+// Starfield
+const STARS=700, sPos=new Float32Array(STARS*3);
+for(let i=0;i<STARS;i++){sPos[i*3]=(Math.random()-.5)*22;sPos[i*3+1]=(Math.random()-.5)*22;sPos[i*3+2]=(Math.random()-.5)*22;}
+const sGeo=new THREE.BufferGeometry(); sGeo.setAttribute('position',new THREE.BufferAttribute(sPos,3));
+scene.add(new THREE.Points(sGeo, new THREE.PointsMaterial({size:.016,color:0xaaccff,transparent:true,opacity:.2,blending:THREE.AdditiveBlending,depthWrite:false})));
+
+// Shooting star
+const shotGeo=new THREE.BufferGeometry(), shotPos2=new Float32Array(6);
+shotGeo.setAttribute('position',new THREE.BufferAttribute(shotPos2,3));
+const shotMat=new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0});
+scene.add(new THREE.Line(shotGeo,shotMat));
+let shot={x:0,y:0,vx:0,vy:0,life:0,maxLife:0,active:false};
+function spawnShot(){shot.x=(Math.random()-.5)*8;shot.y=(Math.random()-.5)*4+2;shot.vx=-(Math.random()*.15+.08);shot.vy=-(Math.random()*.06+.02);shot.maxLife=40+Math.random()*30;shot.life=shot.maxLife;shot.active=true;}
+setInterval(()=>{if(!shot.active)spawnShot();},5000);setTimeout(spawnShot,2000);
+function tickShot(){if(!shot.active)return;shot.life--;if(shot.life<=0){shot.active=false;shotMat.opacity=0;return;}const p=shot.life/shot.maxLife;shotPos2[0]=shot.x;shotPos2[1]=shot.y;shotPos2[2]=0;shotPos2[3]=shot.x-shot.vx*10;shotPos2[4]=shot.y-shot.vy*10;shotPos2[5]=0;shotGeo.attributes.position.needsUpdate=true;shotMat.opacity=p<.2?p*5*.7:p>.8?(1-p)*5*.7:.7;shot.x+=shot.vx;shot.y+=shot.vy;}
+
+// Inner particle shell
+const IN=1400, inGeo=new THREE.BufferGeometry();
+const inPos=new Float32Array(IN*3), inCol=new Float32Array(IN*3);
+for(let i=0;i<IN;i++){const y=1-(i/(IN-1))*2,r=Math.sqrt(Math.max(0,1-y*y)),th=Math.PI*(3-Math.sqrt(5))*i;inPos[i*3]=Math.cos(th)*r*.96;inPos[i*3+1]=y*.96;inPos[i*3+2]=Math.sin(th)*r*.96;inCol[i*3]=.2;inCol[i*3+1]=.55;inCol[i*3+2]=1;}
+inGeo.setAttribute('position',new THREE.BufferAttribute(inPos,3));inGeo.setAttribute('color',new THREE.BufferAttribute(inCol,3));
+const inMat=new THREE.PointsMaterial({size:.013,vertexColors:true,transparent:true,opacity:.5,blending:THREE.AdditiveBlending,depthWrite:false});
+const inPts=new THREE.Points(inGeo,inMat);
+
+// Outer haze (not in group)
+const OUT=700, outGeo=new THREE.BufferGeometry();
+const outPos=new Float32Array(OUT*3), outCol=new Float32Array(OUT*3);
+for(let i=0;i<OUT;i++){const phi=Math.acos(2*Math.random()-1),tht=Math.random()*Math.PI*2,rad=1.05+Math.random()*.18;outPos[i*3]=rad*Math.sin(phi)*Math.cos(tht);outPos[i*3+1]=rad*Math.sin(phi)*Math.sin(tht);outPos[i*3+2]=rad*Math.cos(phi);outCol[i*3]=.03;outCol[i*3+1]=.14;outCol[i*3+2]=.7;}
+outGeo.setAttribute('position',new THREE.BufferAttribute(outPos,3));outGeo.setAttribute('color',new THREE.BufferAttribute(outCol,3));
+const outMat=new THREE.PointsMaterial({size:.022,vertexColors:true,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false});
+const outPts=new THREE.Points(outGeo,outMat); scene.add(outPts);
+
+// Group + intro animation
+const group=new THREE.Group(); group.add(inPts); scene.add(group);
+group.scale.setScalar(.001);
+let introScale=.001, introDone=false;
+
+// Sprites
+const sprites=[];
+let loadedCount=0;
+const loadingEl=document.getElementById('loading');
+
+function fibPt(i,n){const y=1-(i/(n-1))*2,r=Math.sqrt(Math.max(0,1-y*y)),th=Math.PI*(3-Math.sqrt(5))*i;return new THREE.Vector3(Math.cos(th)*r,y,Math.sin(th)*r);}
+
+function makeTex(iconUrl,name,cb){
+  const S=256,rr=36,c=document.createElement('canvas');
+  c.width=c.height=S; const ctx=c.getContext('2d');
+  function draw(img){
+    ctx.clearRect(0,0,S,S);
+    ctx.beginPath();ctx.roundRect(5,5,S-10,S-10,rr);
+    ctx.fillStyle='rgba(6,10,20,0.96)';ctx.fill();
+    ctx.strokeStyle='rgba(125,249,200,0.30)';ctx.lineWidth=2.2;ctx.stroke();
+    if(img){ctx.drawImage(img,48,48,S-96,S-96);}
+    else{ctx.fillStyle='rgba(125,249,200,.8)';ctx.font=`300 ${S*.34}px "DM Sans",monospace`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(name[0].toUpperCase(),S/2,S/2+2);}
+    loadedCount++;if(loadedCount>=SITES.length)loadingEl.classList.add('done');
+    cb(new THREE.CanvasTexture(c));
+  }
+  const img=new Image();img.crossOrigin='anonymous';
+  img.onload=()=>draw(img);img.onerror=()=>draw(null);img.src=iconUrl;
+}
+
+SITES.forEach((site,i)=>{
+  makeTex(site.icon,site.name,(tex)=>{
+    const mat=new THREE.SpriteMaterial({map:tex,transparent:true,opacity:.93,depthWrite:false,depthTest:true});
+    const sp=new THREE.Sprite(mat);
+    const pos=fibPt(i,SITES.length).multiplyScalar(1.1);
+    sp.position.copy(pos); sp.scale.set(.22,.22,1);
+    sp.userData={site,base:.22};
+    group.add(sp); sprites.push(sp);
+  });
+});
+
+const raycaster=new THREE.Raycaster();
+raycaster.params.Sprite={threshold:.13};
+
+// ════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════
+let sphScale=1,targetScale=1;
+// Quaternion-based rotation — no gimbal lock
+const qCurrent = new THREE.Quaternion();  // current displayed rotation
+const qTarget  = new THREE.Quaternion();  // target (for auto-rotate smoothing)
+// Auto-rotate axis
+const autoAxis = new THREE.Vector3(0,1,0);
+let prevZoomDist=null,prevCX=null,prevCY=null;
+let autoRotWeight=1.0,handPresent=false,lastHand=0;
+// Inertia: stores last hand velocity as a delta quaternion
+let lastDx=0, lastDy=0; // last hand movement direction
+let hoveredSp=null;
+
+// Dwell-to-click state (1.6s hover)
+const DWELL_MS = 1600;
+const CIRC=2*Math.PI*26; // ring circumference ≈163.36
+let dwell={sp:null, startTime:0, fired:false};
+
+// ════════════════════════════════════════════
+//  DOM
+// ════════════════════════════════════════════
+const curEl  =document.getElementById('cur');
+const ringEl =document.getElementById('shake-ring');
+const ringC  =ringEl.querySelector('circle');
+const toastEl=document.getElementById('toast');
+const labelEl=document.getElementById('site-label');
+const videoEl=document.getElementById('video');
+const uiEl   =document.getElementById('ui');
+
+// ════════════════════════════════════════════
+// ════════════════════════════════════════════
+//  GESTURE DETECTION
+// ════════════════════════════════════════════
+
+// XY-only distance (ignore Z so camera distance never triggers zoom)
+function pinchDistXY(lm){ return Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y); }
+function handCenter(lm){ let x=0,y=0; lm.forEach(p=>{x+=p.x;y+=p.y;}); return{x:x/21,y:y/21}; }
+
+// How far a fingertip is above its PIP joint (positive = extended)
+function extDeg(lm,tip,pip){ return lm[pip].y - lm[tip].y; } // positive = up
+
+// Thumb extension: tip clearly to the side of base (x-axis, mirror aware)
+function thumbExt(lm){ return Math.abs(lm[4].x - lm[2].x) > 0.04; }
+
+// FIST: all 4 fingers clearly down (thumb ignored)
+function isFist(lm){
+  return extDeg(lm,8,6)<-0.01 && extDeg(lm,12,10)<-0.01 &&
+         extDeg(lm,16,14)<-0.01 && extDeg(lm,20,18)<-0.01;
+}
+
+// POINTING: index clearly extended (>0.04), thumb NOT extended (tucked),
+//           middle/ring/pinky all down
+function isPointing(lm){
+  const indexUp   = extDeg(lm,8,6)  >  0.02;
+  const thumbDown = !thumbExt(lm);               // thumb tucked in
+  const midDown   = extDeg(lm,12,10) <  0.0;
+  const ringDown  = extDeg(lm,16,14) <  0.0;
+  const pinkyDown = extDeg(lm,20,18) <  0.0;
+  return indexUp && thumbDown && midDown && ringDown && pinkyDown;
+}
+
+// PINCH-ZOOM: thumb AND index BOTH clearly extended, rest curled
+// Strict: requires both >0.035 and others clearly down
+function isPinchZoom(lm){
+  const thumbOk  = thumbExt(lm);                 // thumb spread out
+  const indexUp  = extDeg(lm,8,6)   >  0.02;
+  const midDown  = extDeg(lm,12,10) <  0.0;
+  const ringDown = extDeg(lm,16,14) <  0.0;
+  const pkyDown  = extDeg(lm,20,18) <  0.0;
+  return thumbOk && indexUp && midDown && ringDown && pkyDown;
+}
+
+// OPEN HAND: all 4 fingers extended
+function isOpenHand(lm){
+  return extDeg(lm,8,6)>0.01 && extDeg(lm,12,10)>0.01 &&
+         extDeg(lm,16,14)>0.01 && extDeg(lm,20,18)>0.01;
+}
+
+// ALL-CLOSED fist (strict): used for burst detection
+function isClosedFist(lm){
+  return extDeg(lm,8,6)<-0.03 && extDeg(lm,12,10)<-0.03 &&
+         extDeg(lm,16,14)<-0.03 && extDeg(lm,20,18)<-0.03 &&
+         !thumbExt(lm);
+}
+
+// ════════════════════════════════════════════
+//  DWELL TIMER (hover 1.6s → navigate)
+// ════════════════════════════════════════════
+function startDwell(sp){
+  if(dwell.sp===sp) return;
+  dwell={sp, startTime:Date.now(), fired:false};
+  ringEl.style.display='block';
+  requestAnimationFrame(()=>ringEl.classList.add('show'));
+}
+function cancelDwell(){
+  dwell={sp:null,startTime:0,fired:false};
+  ringC.style.strokeDashoffset=CIRC;
+  ringEl.classList.remove('show'); ringEl.style.display='none';
+  labelEl.classList.remove('show'); curEl.classList.remove('hover');
+}
+function tickDwell(fx,fy){
+  if(!dwell.sp||dwell.fired) return;
+  const progress=Math.min(1,(Date.now()-dwell.startTime)/DWELL_MS);
+  ringC.style.strokeDashoffset=CIRC*(1-progress);
+  ringEl.style.left=fx+'px'; ringEl.style.top=fy+'px';
+  labelEl.style.left=fx+'px'; labelEl.style.top=(fy+40)+'px';
+  if(progress>=1){
+    dwell.fired=true;
+    const s=dwell.sp.userData.site;
+    cancelDwell(); showToast(`↗ ${s.name}`); navigateTo(s.url, s.app);
+  }
+}
+
+// ════════════════════════════════════════════
+//  BURST ZOOM state (both-hand open burst)
+// ════════════════════════════════════════════
+// Track per-hand closed→open transition
+let burstState={h0closed:false, h1closed:false};
+
+function checkBurst(allLm){
+  if(allLm.length < 2){ burstState={h0closed:false,h1closed:false}; return; }
+  const c0=isClosedFist(allLm[0]), c1=isClosedFist(allLm[1]);
+  const o0=isOpenHand(allLm[0]),   o1=isOpenHand(allLm[1]);
+  // Latch closed state
+  if(c0) burstState.h0closed=true;
+  if(c1) burstState.h1closed=true;
+  // Both hands open after both were closed → BURST
+  if(burstState.h0closed && burstState.h1closed && o0 && o1){
+    burstState={h0closed:false,h1closed:false};
+    targetScale=Math.min(3.6, targetScale*2.2);
+    showToast('💥 확대!');
+  }
+}
+
+// ════════════════════════════════════════════
+//  MEDIAPIPE — 2 hands
+// ════════════════════════════════════════════
+const mpHands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+mpHands.setOptions({maxNumHands:2, modelComplexity:1, minDetectionConfidence:.72, minTrackingConfidence:.52});
+
+mpHands.onResults(res=>{
+  const allLm = res.multiHandLandmarks || [];
+
+  // No hands
+  if(!allLm.length){
+    handPresent=false;
+    curEl.style.display='none';
+    if(hoveredSp){hoveredSp.scale.setScalar(hoveredSp.userData.base);hoveredSp=null;}
+    prevZoomDist=prevCX=prevCY=null;
+    cancelDwell(); return;
+  }
+  handPresent=true; lastHand=Date.now();
+
+  // ── BURST CHECK (two hands) ──
+  checkBurst(allLm);
+
+  // Primary hand = first detected
+  const lm=allLm[0];
+
+  const fist    = isFist(lm);
+  const zooming = !fist && isPinchZoom(lm);
+  const pointing = !fist && !zooming && isPointing(lm);
+  const rotating = !fist && !zooming && !pointing && isOpenHand(lm);
+  // Use wrist (lm[0]) as rotation anchor — stable, unaffected by finger movement
+  const ctr = { x: lm[0].x, y: lm[0].y };
+  const fx=(1-lm[8].x)*window.innerWidth;
+  const fy=lm[8].y*window.innerHeight;
+
+  // ── FIST: do nothing ──
+  if(fist){
+    curEl.style.display='none';
+    if(hoveredSp){hoveredSp.scale.setScalar(hoveredSp.userData.base);hoveredSp=null;}
+    prevZoomDist=null; prevCX=null; prevCY=null;
+    cancelDwell(); return;
+  }
+
+  // ── PINCH-ZOOM: thumb+index only, sensitivity halved ──
+  if(zooming){
+    curEl.style.display='none';
+    cancelDwell();
+    if(hoveredSp){hoveredSp.scale.setScalar(hoveredSp.userData.base);hoveredSp=null;}
+    const d=pinchDistXY(lm);
+    if(prevZoomDist!==null){
+      const delta=d-prevZoomDist;
+      // Sensitivity: ×5 (was ×11) — takes ~2 gestures for full range
+      targetScale=Math.max(.3,Math.min(3.6,targetScale+delta*7));
+    }
+    prevZoomDist=d;
+    prevCX=null; prevCY=null;
+    return;
+  }
+  prevZoomDist=null;
+
+  // ── POINTING: index only (thumb tucked) → dwell click ──
+  if(pointing){
+    curEl.style.display='block';
+    curEl.style.left=fx+'px'; curEl.style.top=fy+'px';
+    raycaster.setFromCamera({x:(fx/window.innerWidth)*2-1,y:-(fy/window.innerHeight)*2+1},cam3);
+    const hits=raycaster.intersectObjects(sprites);
+    if(hits.length){
+      const hit=hits[0].object;
+      if(hoveredSp!==hit){
+        if(hoveredSp) hoveredSp.scale.setScalar(hoveredSp.userData.base);
+        hoveredSp=hit; cancelDwell(); startDwell(hit);
+        labelEl.textContent=hit.userData.site.name;
+        labelEl.classList.add('show');
+      }
+      curEl.classList.add('hover');
+      tickDwell(fx,fy);
+    } else {
+      if(hoveredSp){hoveredSp.scale.setScalar(hoveredSp.userData.base);hoveredSp=null;}
+      curEl.classList.remove('hover'); cancelDwell();
+    }
+    prevCX=null; prevCY=null; return;
+  }
+
+  // Left pointing mode
+  if(hoveredSp){hoveredSp.scale.setScalar(hoveredSp.userData.base);hoveredSp=null;}
+  curEl.style.display='none'; curEl.classList.remove('hover');
+  cancelDwell();
+
+  // ── OPEN HAND: rotate ──
+  if(rotating && prevCX!==null){
+    const dx = ctr.x - prevCX;
+    const dy = ctr.y - prevCY;
+    if(Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001){
+      // Build incremental rotation: left/right = world Y, up/down = world X
+      const angleY = -dx * 9;
+      const angleX =  dy * 9;
+      const qDelta = new THREE.Quaternion();
+      const axisX  = new THREE.Vector3(1,0,0);
+      const axisY  = new THREE.Vector3(0,1,0);
+      const qx = new THREE.Quaternion().setFromAxisAngle(axisX, angleX);
+      const qy = new THREE.Quaternion().setFromAxisAngle(axisY, angleY);
+      // Apply Y first (world), then X — consistent regardless of current orientation
+      qDelta.multiplyQuaternions(qy, qx);
+      qTarget.multiplyQuaternions(qDelta, qTarget);
+      // Remember direction for auto-rotate after hand leaves
+      lastDx = dx; lastDy = dy;
+    }
+  }
+  prevCX=ctr.x; prevCY=ctr.y;
+});
+
+// ════════════════════════════════════════════
+//  CAMERA — front camera on mobile
+// ════════════════════════════════════════════
+let mpCam=null,camStream=null,camOn=false,previewOn=false;
+
+async function startCam(){
+  try{
+    // Try ideal front camera first, fall back to just 'user'
+    camStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'user', width:{ideal:640}, height:{ideal:480}}
+    });
+    videoEl.srcObject=camStream;
+    mpCam=new Camera(videoEl,{onFrame:async()=>await mpHands.send({image:videoEl}),width:640,height:480});
+    mpCam.start();camOn=true;
+    updateCamUI();showToast('카메라 켜짐');
+    setTimeout(()=>uiEl.classList.add('hidden'),4000);
+  }catch(e){showToast('카메라 권한 → 브라우저 설정에서 허용해주세요');}
+}
+function stopCam(){
+  try{mpCam?.stop();}catch(e){}
+  camStream?.getTracks().forEach(t=>t.stop());
+  videoEl.srcObject=null;mpCam=null;camStream=null;camOn=false;previewOn=false;
+  videoEl.classList.remove('show');
+  curEl.style.display="none"; cancelDwell();
+  updateCamUI();showToast('카메라 꺼짐');
+  uiEl.classList.remove('hidden');
+}
+function updateCamUI(){
+  document.getElementById('cam-btn').classList.toggle('active',camOn);
+  const lbl=document.getElementById('cam-label');
+  lbl.textContent=camOn?'ON':'OFF';lbl.classList.toggle('on',camOn);
+}
+
+const camBtn=document.getElementById('cam-btn');
+// Single tap = toggle cam. Double tap = preview toggle (300ms window)
+let tapTimer=null,tapCount=0;
+camBtn.addEventListener('click',()=>{
+  tapCount++;
+  if(tapCount===1){
+    tapTimer=setTimeout(()=>{
+      tapCount=0;
+      camOn?stopCam():startCam();
+    },280);
+  } else {
+    clearTimeout(tapTimer);tapCount=0;
+    if(!camOn)return;
+    previewOn=!previewOn;videoEl.classList.toggle('show',previewOn);
+  }
+});
+
+// ════════════════════════════════════════════
+//  TOAST
+// ════════════════════════════════════════════
+let toastT=null;
+function showToast(msg){toastEl.textContent=msg;toastEl.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>toastEl.classList.remove('show'),2400);}
+
+// ════════════════════════════════════════════
+//  RESIZE + ORIENTATION
+// ════════════════════════════════════════════
+function onResize(){
+  renderer.setSize(window.innerWidth,window.innerHeight);
+  cam3.aspect=window.innerWidth/window.innerHeight;
+  cam3.updateProjectionMatrix();
+}
+window.addEventListener('resize',onResize);
+window.addEventListener('orientationchange',()=>setTimeout(onResize,300));
+
+// Hand timeout
+setInterval(()=>{
+  if(handPresent&&Date.now()-lastHand<700){}
+  else{handPresent=false;}
+},200);
+
+// ════════════════════════════════════════════
+//  RENDER LOOP
+// ════════════════════════════════════════════
+const inPhase =Float32Array.from({length:IN},(_,i)=>i*.004);
+const outPhase=Float32Array.from({length:OUT},(_,i)=>i*.007);
+let t=0,cTick=0;
+
+(function animate(){
+  requestAnimationFrame(animate);
+  t+=.005;
+
+  // autoRotWeight now handled inside inertia block
+
+  // No auto-rotate
+
+  // Smooth slerp toward target quaternion
+  qCurrent.slerp(qTarget, 0.14);
+  sphScale+=(targetScale-sphScale)*.055;
+
+  group.setRotationFromQuaternion(qCurrent);
+  outPts.setRotationFromQuaternion(qCurrent);
+
+  cTick++;
+  if(cTick%3===0){
+    const ic=inGeo.attributes.color;
+    for(let i=0;i<IN;i++){const ph=t*.45+inPhase[i];ic.array[i*3]=.12+Math.sin(ph)*.18;ic.array[i*3+1]=.45+Math.cos(ph*.8)*.28;ic.array[i*3+2]=1;}
+    ic.needsUpdate=true;
+    const oc=outGeo.attributes.color;
+    for(let i=0;i<OUT;i++){const ph=t*.25+outPhase[i];oc.array[i*3]=.02+Math.sin(ph)*.05;oc.array[i*3+1]=.1+Math.cos(ph)*.09;oc.array[i*3+2]=.68+Math.sin(ph*1.2)*.14;}
+    oc.needsUpdate=true;
+  }
+
+  // Intro scale
+  if(!introDone){
+    introScale+=(1-introScale)*.055;
+    group.scale.setScalar(introScale*sphScale);
+    if(introScale>.995)introDone=true;
+  } else {
+    group.scale.setScalar(sphScale);
+  }
+
+  // Back-face opacity
+  if(cTick%2===0){
+    sprites.forEach(sp=>{
+      if(sp===hoveredSp){sp.material.opacity=.95;return;}
+      const wp=sp.position.clone();group.localToWorld(wp);
+      sp.material.opacity=.36+Math.max(0,Math.min(1,(wp.z+1.15)/2.3))*.57;
+    });
+  }
+
+  if(hoveredSp)hoveredSp.scale.setScalar(hoveredSp.userData.base*(1.28+Math.sin(t*7)*.06));
+  tickShot();
+  // Update dwell ring smoothly every frame
+  if(dwell.sp && !dwell.fired){
+    const elapsed=Date.now()-dwell.startTime;
+    const prog=Math.min(1,elapsed/DWELL_MS);
+    ringC.style.strokeDashoffset=CIRC*(1-prog);
+    if(prog>=1&&!dwell.fired){ dwell.fired=true; const s=dwell.sp.userData.site; cancelDwell(); showToast(`↗ ${s.name}`); navigateTo(s.url, s.app); }
+  }
+  renderer.render(scene,cam3);
+})();
+</script>
+</body>
+</html>
